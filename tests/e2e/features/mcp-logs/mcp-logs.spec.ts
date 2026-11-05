@@ -37,6 +37,52 @@ test.describe('MCP Logs', () => {
     })
   })
 
+  test.describe('MCP Log Metric Strip', () => {
+    test('draws the LLM and Relay metric strip from the MCP stats and histograms', async ({ mcpLogsPage, page }) => {
+      const stats = { total_executions: 5, success_count: 3, error_count: 1, cancelled_count: 1, success_rate: 60, average_latency: 42, total_cost: 0.5 }
+      const buckets = [0, 1, 2].map((i) => new Date(Date.now() - (3 - i) * 3600_000).toISOString())
+      await page.route('**/api/mcp-logs**', async (route) => {
+        const url = new URL(route.request().url())
+        const json = (body: unknown) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+        switch (url.pathname) {
+          case '/api/mcp-logs/stats':
+            return json({ ...stats, has_previous_period: true, previous: { ...stats, total_executions: 4, success_rate: 50, total_cost: 0.25 } })
+          case '/api/mcp-logs/histogram':
+            return json({ bucket_size_seconds: 3600, buckets: buckets.map((timestamp, i) => ({ timestamp, count: i + 1, success: i, error: 1, cancelled: 0 })) })
+          case '/api/mcp-logs/histogram/cost':
+            return json({ bucket_size_seconds: 3600, buckets: buckets.map((timestamp, i) => ({ timestamp, total_cost: 0.1 * (i + 1) })) })
+          case '/api/mcp-logs/histogram/latency':
+            return json({
+              bucket_size_seconds: 3600,
+              buckets: buckets.map((timestamp, i) => ({ timestamp, avg_latency: 40 + i, p90_latency: 50, p95_latency: 60, p99_latency: 70, avg_overhead: 0, p90_overhead: 0, p95_overhead: 0, p99_overhead: 0, total_requests: i + 1 })),
+            })
+          case '/api/mcp-logs/filterdata':
+            return json({ tool_names: [], server_labels: [], virtual_keys: [] })
+          case '/api/mcp-logs':
+            return json({ logs: [], pagination: { limit: 50, offset: 0, sort_by: 'timestamp', order: 'desc', total_count: 5 }, has_logs: true })
+        }
+        return route.continue()
+      })
+      const latencyRequested = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/mcp-logs/histogram/latency')
+      const statsCompared = page.waitForRequest((request) => {
+        const url = new URL(request.url())
+        return url.pathname === '/api/mcp-logs/stats' && url.searchParams.get('compare_to_previous') === 'true'
+      })
+      await mcpLogsPage.goto()
+      await Promise.all([latencyRequested, statsCompared])
+
+      const strip = page.getByTestId('mcp-logs-metric-strip')
+      await expect(strip).toBeVisible()
+      await expect(strip.getByTestId('mcp-logs-stat-executions')).toContainText('Total Executions')
+      await expect(strip.getByTestId('mcp-logs-stat-executions')).toContainText('5')
+      // A previous period is reported, so the executions, success rate and cost tiles each carry their change.
+      for (const tile of ['mcp-logs-stat-executions', 'mcp-logs-stat-success', 'mcp-logs-stat-cost']) {
+        await expect(strip.getByTestId(tile).getByTestId('mcp-logs-metric-trailing')).toBeVisible()
+      }
+      await expect(strip.getByTestId('mcp-logs-stat-latency')).toBeVisible()
+    })
+  })
+
   test.describe('MCP Log Filtering', () => {
     test('should filter logs by tool name', async ({ mcpLogsPage, page }) => {
       const filtersVisible = await mcpLogsPage.filtersButton.isVisible().catch(() => false)
