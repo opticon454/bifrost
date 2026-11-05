@@ -219,6 +219,7 @@
                   "mcp/auth/oauth",
                   "mcp/auth/per-user-oauth",
                   "mcp/auth/token-exchange",
+                  "mcp/auth/per-caller-discovery",
                   "mcp/auth/cross-app-access"
                 ]
               },
